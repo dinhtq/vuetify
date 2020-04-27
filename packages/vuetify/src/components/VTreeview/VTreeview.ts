@@ -93,6 +93,7 @@ export default mixins(
     nodes: {} as Record<string | number, NodeState>,
     openCache: new Set() as NodeCache,
     selectedCache: new Set() as NodeCache,
+    initialSelectionUpdate: true,
   }),
 
   computed: {
@@ -149,6 +150,9 @@ export default mixins(
     },
     value (value: (string | number | any)[]) {
       this.handleNodeCacheWatcher(value, this.selectedCache, this.updateSelected, this.emitSelected)
+      if (this.initialSelectionUpdate) {
+        this.initialSelectionUpdate = false
+      }
     },
     open (value: (string | number | any)[]) {
       this.handleNodeCacheWatcher(value, this.openCache, this.updateOpen, this.emitOpen)
@@ -233,11 +237,15 @@ export default mixins(
       }
     },
     calculateState (node: NodeState, state: Record<string | number, NodeState>) {
+      console.log('calculateState')
+      console.log('state', state)
       const counts = node.children.reduce((counts: number[], child: string | number) => {
         counts[0] += +Boolean(state[child].isSelected)
         counts[1] += +Boolean(state[child].isIndeterminate)
         return counts
       }, [0, 0])
+
+      console.log('counts', counts)
 
       node.isSelected = !!node.children.length && counts[0] === node.children.length
       node.isIndeterminate = !node.isSelected && (counts[0] > 0 || counts[1] > 0)
@@ -299,7 +307,7 @@ export default mixins(
       if (this.nodes[key]) this.nodes[key].vnode = null
     },
     isParent (key: string | number) {
-      return this.nodes[key].children && this.nodes[key].children.length
+      return this.nodes[key].children && !!this.nodes[key].children.length
     },
     updateActive (key: string | number, isActive: boolean) {
       if (!this.nodes.hasOwnProperty(key)) return
@@ -322,7 +330,25 @@ export default mixins(
 
       this.updateVnodeState(key)
     },
+    hasSomeSelectedDisabledChildren (key: string | number) {
+      // console.log('hasSomeSelectedDisabledChildren', key)
+      if (!this.isParent(key) || !this.nodes[key].children) {
+        // console.log('return false')
+        return false
+      }
+      // console.log('this.nodes[key].children', this.nodes[key].children)
+
+      const hasIt = this.nodes[key].children.some(childKey => {
+        return this.nodes[childKey].item[this.itemDisabled] && this.nodes[childKey].isSelected
+      })
+      // console.log('hasIt', hasIt)
+      return hasIt
+    },
     updateSelected (key: string | number, isSelected: boolean) {
+      console.log('************ updateSelected ************')
+      console.log('key', key)
+      console.log('isSelected', isSelected)
+      console.log('nodes', this.nodes)
       if (!this.nodes.hasOwnProperty(key)) return
 
       const changed = new Map()
@@ -330,12 +356,29 @@ export default mixins(
       if (this.selectionType !== 'independent') {
         const descendants = [key, ...this.getDescendants(key)]
         descendants.forEach(descendant => {
-          this.nodes[descendant].isSelected = isSelected
-          this.nodes[descendant].isIndeterminate = false
-          changed.set(descendant, isSelected)
+          console.log('descendant', descendant)
+          // console.log('this.isParent(descendant)', this.isParent(descendant))
+          // console.log('this.hasSomeSelectedDisabledChildren(descendant)', this.hasSomeSelectedDisabledChildren(descendant))
+          if (this.initialSelectionUpdate ||
+            (this.isParent(descendant) && !isSelected && !this.hasSomeSelectedDisabledChildren(descendant)) ||
+            !this.nodes[descendant].item[this.itemDisabled]) {
+            console.log('updating isSelect')
+            this.nodes[descendant].isSelected = isSelected
+          }
+
+          if (!this.initialSelectionUpdate && this.hasSomeSelectedDisabledChildren(descendant) && !this.nodes[descendant].isSelected) {
+            this.nodes[descendant].isIndeterminate = true
+          } else {
+            this.nodes[descendant].isIndeterminate = false
+          }
+
+          if (this.initialSelectionUpdate || !this.nodes[descendant].item[this.itemDisabled]) {
+            changed.set(descendant, isSelected)
+          }
         })
 
         const parents = this.getParents(key)
+        console.log('parents', parents)
         parents.forEach(parent => {
           this.nodes[parent] = this.calculateState(this.nodes[parent], this.nodes)
           changed.set(parent, this.nodes[parent].isSelected)
@@ -345,6 +388,8 @@ export default mixins(
         this.nodes[key].isIndeterminate = false
         changed.set(key, isSelected)
       }
+
+      console.log('changed', changed)
 
       for (const [key, value] of changed.entries()) {
         this.updateVnodeState(key)
